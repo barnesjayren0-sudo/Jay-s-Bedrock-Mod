@@ -1,0 +1,21 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Jay's Bedrock RP",
+    "description": "Resource pack base for Jay's Bedrock Mod",
+    "uuid": "d4e5f6a7-b8c9-0123-def0-234567890123",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "e5f6a7b8-c9d0-1234-ef01-345678901234",
+      "version": [1, 0, 0]
+    }
+  ],
+  "metadata": {
+    "authors": ["Jay"],
+    "url": "https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod"
+  }
+}
