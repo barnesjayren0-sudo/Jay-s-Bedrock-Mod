@@ -1,8 +1,8 @@
 /**
- * NestCord v1.5.0
- * !home | !spawn | !back | .90909 admin
+ * NestCord v1.6.0
+ * Homes, spawn, back, TPA, warps, RTP, starter kit, admin
  */
-import { world, system, GameMode } from "@minecraft/server";
+import { world, system, GameMode, ItemStack } from "@minecraft/server";
 import { ActionFormData, ModalFormData } from "@minecraft/server-ui";
 import {
   BRAND,
@@ -11,13 +11,27 @@ import {
   HOME_LIMIT,
   VIP_NAMES,
   VIP_HOME_LIMIT,
+  TPA_TIMEOUT_MS,
+  RTP_COOLDOWN_SEC,
+  RTP_RANGE,
+  RTP_MAX_TRIES,
+  STARTER_KIT_ENABLED,
+  STARTER_KIT,
   WEBHOOK_URL,
   REPORT_ON_FIRST_JOIN,
   REPORT_PLAYER_NAMES,
 } from "./config.js";
 
 const HOMES_KEY = "nestcord_homes_v1";
-const META_KEY = "nestcord_meta_v1"; // back / death positions
+const META_KEY = "nestcord_meta_v1";
+const WARPS_KEY = "nestcord_warps_v1";
+const FLAGS_KEY = "nestcord_flags_v1"; // starter kit claimed, etc.
+
+/** @type {Map<string, { fromId: string, fromName: string, expires: number }>} */
+const tpaRequests = new Map(); // key = target player id
+
+/** @type {Map<string, number>} */
+const rtpCooldown = new Map();
 
 let reportedThisSession = false;
 
@@ -40,8 +54,7 @@ function safeName(raw, fallback = "home") {
 }
 
 function isVip(player) {
-  const name = player.name;
-  return VIP_NAMES.some((n) => String(n).toLowerCase() === name.toLowerCase());
+  return VIP_NAMES.some((n) => String(n).toLowerCase() === player.name.toLowerCase());
 }
 
 function homeLimitFor(player) {
@@ -58,25 +71,45 @@ function posPayload(player) {
   };
 }
 
-// ─── meta (back / death) ─────────────────────────────────
-function loadMeta() {
+function findPlayerByName(name) {
+  const q = String(name || "").toLowerCase();
+  if (!q) return null;
+  for (const p of world.getPlayers()) {
+    if (p.name.toLowerCase() === q) return p;
+  }
+  // partial match if unique
+  const partial = [...world.getPlayers()].filter((p) =>
+    p.name.toLowerCase().includes(q)
+  );
+  return partial.length === 1 ? partial[0] : null;
+}
+
+// ─── JSON props ──────────────────────────────────────────
+function loadJson(key, fallback) {
   try {
-    const raw = world.getDynamicProperty(META_KEY);
-    if (typeof raw !== "string" || !raw) return {};
+    const raw = world.getDynamicProperty(key);
+    if (typeof raw !== "string" || !raw) return fallback;
     return JSON.parse(raw);
   } catch {
-    return {};
+    return fallback;
   }
 }
 
-function saveMeta(data) {
+function saveJson(key, data) {
   try {
-    world.setDynamicProperty(META_KEY, JSON.stringify(data));
+    world.setDynamicProperty(key, JSON.stringify(data));
   } catch (e) {
-    console.warn(`[${BRAND}] meta save failed: ${e}`);
+    console.warn(`[${BRAND}] save ${key}: ${e}`);
   }
 }
 
+// meta: back
+function loadMeta() {
+  return loadJson(META_KEY, {});
+}
+function saveMeta(data) {
+  saveJson(META_KEY, data);
+}
 function setBack(player, reason = "tp") {
   const meta = loadMeta();
   if (!meta[player.id]) meta[player.id] = {};
@@ -84,82 +117,81 @@ function setBack(player, reason = "tp") {
   meta[player.id].backReason = reason;
   saveMeta(meta);
 }
-
 function getBack(player) {
   const meta = loadMeta();
   return meta[player.id] && meta[player.id].back;
 }
-
 function setDeath(player) {
   const meta = loadMeta();
   if (!meta[player.id]) meta[player.id] = {};
   meta[player.id].death = posPayload(player);
-  // death also becomes default back target
   meta[player.id].back = meta[player.id].death;
   meta[player.id].backReason = "death";
   saveMeta(meta);
 }
 
-// ─── homes storage ───────────────────────────────────────
+// flags: starter
+function loadFlags() {
+  return loadJson(FLAGS_KEY, { starter: {} });
+}
+function saveFlags(f) {
+  saveJson(FLAGS_KEY, f);
+}
+function hasStarter(player) {
+  const f = loadFlags();
+  return !!(f.starter && f.starter[player.id]);
+}
+function markStarter(player) {
+  const f = loadFlags();
+  if (!f.starter) f.starter = {};
+  f.starter[player.id] = true;
+  saveFlags(f);
+}
+
+// warps
+function loadWarps() {
+  return loadJson(WARPS_KEY, {});
+}
+function saveWarps(w) {
+  saveJson(WARPS_KEY, w);
+}
+
+// homes
 function loadStore() {
-  try {
-    const raw = world.getDynamicProperty(HOMES_KEY);
-    if (typeof raw !== "string" || !raw) {
-      return { players: {}, meta: {} };
-    }
-    const data = JSON.parse(raw);
-    if (!data.players) data.players = {};
-    if (!data.meta) data.meta = {};
-    return data;
-  } catch {
-    return { players: {}, meta: {} };
-  }
+  const data = loadJson(HOMES_KEY, { players: {}, meta: {} });
+  if (!data.players) data.players = {};
+  if (!data.meta) data.meta = {};
+  return data;
 }
-
 function saveStore(data) {
-  try {
-    world.setDynamicProperty(HOMES_KEY, JSON.stringify(data));
-  } catch (e) {
-    console.warn(`[${BRAND}] save failed: ${e}`);
-  }
+  saveJson(HOMES_KEY, data);
 }
-
 function getHomesMap(player) {
   const store = loadStore();
   if (!store.players[player.id]) store.players[player.id] = {};
   return { store, homes: store.players[player.id] };
 }
-
 function listHomeNames(player) {
   return Object.keys(getHomesMap(player).homes);
 }
-
 function getHome(player, name) {
   return getHomesMap(player).homes[name];
 }
-
 function saveHome(player, name) {
   name = safeName(name);
   const { store, homes } = getHomesMap(player);
   const limit = homeLimitFor(player);
   const isUpdate = Object.prototype.hasOwnProperty.call(homes, name);
-  const count = Object.keys(homes).length;
-
-  if (!isUpdate && count >= limit) {
-    say(
-      player,
-      `§c[${BRAND}] Home limit reached (§f${limit}§c). Delete one or get VIP.`
-    );
+  if (!isUpdate && Object.keys(homes).length >= limit) {
+    say(player, `§c[${BRAND}] Home limit §f${limit}§c reached.`);
     return null;
   }
-
   homes[name] = posPayload(player);
   store.players[player.id] = homes;
   store.meta[player.id] = player.name;
   saveStore(store);
   return name;
 }
-
 function deleteHome(player, name) {
   const { store, homes } = getHomesMap(player);
   if (!homes[name]) return false;
@@ -189,11 +221,8 @@ function teleportTo(player, h, label, recordBack = true) {
 function goSpawn(player) {
   try {
     setBack(player, "tp");
-    // world spawn — Bedrock Script API
-    const spawn = world.getDefaultSpawnLocation
-      ? world.getDefaultSpawnLocation()
-      : null;
-    if (spawn) {
+    if (typeof world.getDefaultSpawnLocation === "function") {
+      const spawn = world.getDefaultSpawnLocation();
       const dim = world.getDimension("minecraft:overworld");
       player.teleport(
         { x: spawn.x + 0.5, y: spawn.y, z: spawn.z + 0.5 },
@@ -203,32 +232,22 @@ function goSpawn(player) {
       return;
     }
   } catch (e) {
-    console.warn(`[${BRAND}] getDefaultSpawnLocation: ${e}`);
+    console.warn(`[${BRAND}] spawn: ${e}`);
   }
-  // fallback command
-  try {
-    setBack(player, "tp");
-    player.runCommand("tp @s 0 64 0"); // weak fallback
-    say(player, `§e[${BRAND}] Spawn API missing — used fallback. Set a warp later.`);
-  } catch (e2) {
-    say(player, `§c[${BRAND}] Could not TP to spawn: ${e2}`);
-  }
+  say(player, `§c[${BRAND}] Spawn unavailable on this build.`);
 }
 
 function goBack(player) {
   const h = getBack(player);
   if (!h) {
-    say(player, `§c[${BRAND}] No §f!back§c location yet (die or TP first).`);
+    say(player, `§c[${BRAND}] No back location.`);
     return;
   }
-  // Don't overwrite back with current pos before going — swap style:
   const current = posPayload(player);
   teleportTo(player, h, "back", false);
-  // store where they came from as new back
   const meta = loadMeta();
   if (!meta[player.id]) meta[player.id] = {};
   meta[player.id].back = current;
-  meta[player.id].backReason = "back-swap";
   saveMeta(meta);
 }
 
@@ -236,13 +255,10 @@ function listHomesChat(player) {
   const names = listHomeNames(player);
   const limit = homeLimitFor(player);
   if (!names.length) {
-    say(player, `§e[${BRAND}] No homes. §7Limit: ${limit}${isVip(player) ? " (VIP)" : ""}`);
+    say(player, `§e[${BRAND}] No homes. Limit ${limit}`);
     return;
   }
-  say(
-    player,
-    `§d[${BRAND}] Homes §f${names.length}/${limit}${isVip(player) ? " §6VIP" : ""}`
-  );
+  say(player, `§d[${BRAND}] Homes ${names.length}/${limit}`);
   for (const n of names) {
     const h = getHome(player, n);
     say(
@@ -259,40 +275,221 @@ function ownerLabel(id, meta) {
   return (meta && meta[id]) || `player:${String(id).slice(0, 8)}`;
 }
 
-// ─── presence ────────────────────────────────────────────
-function buildReport(player) {
-  const players = [...world.getPlayers()];
-  const lines = [
-    `**${BRAND}** v${VERSION}`,
-    `Online: **${players.length}**`,
-    `Dim: ${dimShort(player.dimension.id)}`,
-    `UTC: ${new Date().toISOString()}`,
-  ];
-  if (REPORT_PLAYER_NAMES) {
-    lines.push(`Players: ${players.map((p) => p.name).join(", ") || "—"}`);
-  } else {
-    lines.push(`From: ${player.name}`);
+// ─── starter kit ─────────────────────────────────────────
+function giveStarterKit(player) {
+  if (!STARTER_KIT_ENABLED) return;
+  if (hasStarter(player)) return;
+  try {
+    for (const entry of STARTER_KIT) {
+      const stack = new ItemStack(entry.id, entry.amount || 1);
+      player.dimension.spawnItem(stack, player.location);
+    }
+    // try add to inventory first via runCommand as backup feel
+    markStarter(player);
+    say(player, `§a[${BRAND}] Starter kit delivered (items near you if inv full).`);
+  } catch (e) {
+    // command fallback
+    try {
+      for (const entry of STARTER_KIT) {
+        player.runCommand(
+          `give @s ${entry.id.replace("minecraft:", "")} ${entry.amount || 1}`
+        );
+      }
+      markStarter(player);
+      say(player, `§a[${BRAND}] Starter kit received.`);
+    } catch (e2) {
+      console.warn(`[${BRAND}] starter kit: ${e2}`);
+    }
   }
-  return { content: lines.join("\n") };
 }
 
+// ─── TPA ─────────────────────────────────────────────────
+function requestTpa(from, targetName) {
+  const target = findPlayerByName(targetName);
+  if (!target) {
+    say(from, `§c[${BRAND}] Player not found: §f${targetName}`);
+    return;
+  }
+  if (target.id === from.id) {
+    say(from, `§c[${BRAND}] Can't TPA yourself.`);
+    return;
+  }
+  tpaRequests.set(target.id, {
+    fromId: from.id,
+    fromName: from.name,
+    expires: Date.now() + TPA_TIMEOUT_MS,
+  });
+  say(from, `§a[${BRAND}] TPA sent to §f${target.name}§a. They type §e!tpaccept`);
+  say(
+    target,
+    `§e[${BRAND}] §f${from.name}§e requests to teleport to you. §a!tpaccept §7or §c!tpadeny`
+  );
+}
+
+function acceptTpa(target) {
+  const req = tpaRequests.get(target.id);
+  if (!req || Date.now() > req.expires) {
+    tpaRequests.delete(target.id);
+    say(target, `§c[${BRAND}] No pending TPA.`);
+    return;
+  }
+  tpaRequests.delete(target.id);
+  let from = null;
+  for (const p of world.getPlayers()) {
+    if (p.id === req.fromId) {
+      from = p;
+      break;
+    }
+  }
+  if (!from) {
+    say(target, `§c[${BRAND}] Requester is offline.`);
+    return;
+  }
+  setBack(from, "tpa");
+  try {
+    from.teleport(target.location, { dimension: target.dimension });
+    say(from, `§a[${BRAND}] TPA accepted → §f${target.name}`);
+    say(target, `§a[${BRAND}] You accepted §f${from.name}`);
+  } catch (e) {
+    say(target, `§cTPA failed: ${e}`);
+  }
+}
+
+function denyTpa(target) {
+  const req = tpaRequests.get(target.id);
+  if (!req) {
+    say(target, `§c[${BRAND}] No pending TPA.`);
+    return;
+  }
+  tpaRequests.delete(target.id);
+  say(target, `§7[${BRAND}] TPA denied.`);
+  for (const p of world.getPlayers()) {
+    if (p.id === req.fromId) {
+      say(p, `§c[${BRAND}] ${target.name} denied your TPA.`);
+      break;
+    }
+  }
+}
+
+// ─── warps ───────────────────────────────────────────────
+function setWarp(admin, name) {
+  name = safeName(name, "warp").toLowerCase().replace(/ /g, "_");
+  const warps = loadWarps();
+  warps[name] = posPayload(admin);
+  saveWarps(warps);
+  say(admin, `§a[${BRAND}] Warp §f${name} §aset.`);
+}
+
+function delWarp(admin, name) {
+  name = safeName(name, "").toLowerCase().replace(/ /g, "_");
+  const warps = loadWarps();
+  if (!warps[name]) {
+    say(admin, `§c[${BRAND}] No warp §f${name}`);
+    return;
+  }
+  delete warps[name];
+  saveWarps(warps);
+  say(admin, `§c[${BRAND}] Warp §f${name} §cdeleted.`);
+}
+
+function listWarps(player) {
+  const warps = loadWarps();
+  const names = Object.keys(warps);
+  if (!names.length) {
+    say(player, `§e[${BRAND}] No warps. Admin: §f!setwarp <name>`);
+    return;
+  }
+  say(player, `§d[${BRAND}] Warps: §f${names.join(", ")}`);
+}
+
+function goWarp(player, name) {
+  name = String(name || "").toLowerCase().replace(/ /g, "_");
+  const warps = loadWarps();
+  if (!name) {
+    listWarps(player);
+    return;
+  }
+  const h = warps[name];
+  if (!h) {
+    say(player, `§c[${BRAND}] Unknown warp §f${name}§c. §7!warps`);
+    return;
+  }
+  teleportTo(player, h, `warp:${name}`);
+}
+
+// ─── RTP ─────────────────────────────────────────────────
+function isSafeBlock(block) {
+  if (!block) return false;
+  const id = block.typeId;
+  if (!id || id === "minecraft:air") return false;
+  if (id.includes("lava") || id.includes("fire") || id.includes("cactus")) return false;
+  if (id.includes("water")) return false;
+  return true;
+}
+
+function tryRtp(player) {
+  const now = Date.now();
+  const last = rtpCooldown.get(player.id) || 0;
+  const left = RTP_COOLDOWN_SEC * 1000 - (now - last);
+  if (left > 0) {
+    say(player, `§c[${BRAND}] RTP cooldown §f${Math.ceil(left / 1000)}s`);
+    return;
+  }
+
+  const overworld = world.getDimension("minecraft:overworld");
+  for (let i = 0; i < RTP_MAX_TRIES; i++) {
+    const x = Math.floor((Math.random() * 2 - 1) * RTP_RANGE);
+    const z = Math.floor((Math.random() * 2 - 1) * RTP_RANGE);
+    try {
+      // sample top-ish Y
+      for (let y = 120; y >= 40; y--) {
+        const block = overworld.getBlock({ x, y, z });
+        const above = overworld.getBlock({ x, y: y + 1, z });
+        const above2 = overworld.getBlock({ x, y: y + 2, z });
+        if (
+          isSafeBlock(block) &&
+          above &&
+          above.typeId === "minecraft:air" &&
+          above2 &&
+          above2.typeId === "minecraft:air"
+        ) {
+          setBack(player, "rtp");
+          player.teleport(
+            { x: x + 0.5, y: y + 1, z: z + 0.5 },
+            { dimension: overworld }
+          );
+          rtpCooldown.set(player.id, now);
+          say(player, `§a[${BRAND}] RTP → §f${x}, ${y + 1}, ${z}`);
+          return;
+        }
+      }
+    } catch (_) {
+      // chunk may not be loaded — try another point
+    }
+  }
+  say(player, `§c[${BRAND}] RTP failed to find safe ground. Try again.`);
+}
+
+// ─── presence ────────────────────────────────────────────
 async function tryReport(player) {
   if (!WEBHOOK_URL || !String(WEBHOOK_URL).startsWith("http")) return;
   if (!REPORT_ON_FIRST_JOIN || reportedThisSession) return;
   reportedThisSession = true;
-  const body = JSON.stringify(buildReport(player));
   try {
     const net = await import("@minecraft/server-net");
     if (net.http && net.HttpRequest) {
+      const players = [...world.getPlayers()];
+      const body = JSON.stringify({
+        content: `**${BRAND}** v${VERSION} | online ${players.length} | ${player.name}`,
+      });
       const req = new net.HttpRequest(WEBHOOK_URL);
       req.method = net.HttpRequestMethod.Post;
       req.body = body;
       req.headers = [new net.HttpHeader("Content-Type", "application/json")];
       await net.http.request(req);
-      console.warn(`[${BRAND}] webhook ok`);
     }
   } catch (e) {
-    console.warn(`[${BRAND}] webhook skipped: ${e}`);
+    console.warn(`[${BRAND}] webhook: ${e}`);
   }
 }
 
@@ -302,13 +499,12 @@ async function uiHomeRoot(player) {
   const limit = homeLimitFor(player);
   const form = new ActionFormData()
     .title(`§d${BRAND} §8· Homes`)
-    .body(`§7Saved §f${names.length}/${limit}${isVip(player) ? " §6VIP" : ""}`)
+    .body(`§7${names.length}/${limit}${isVip(player) ? " §6VIP" : ""}`)
     .button("§aSave / Update")
     .button("§bTeleport")
     .button("§cDelete")
     .button("§eList in chat")
     .button("§8Close");
-
   const res = await form.show(player);
   if (res.canceled) return;
   if (res.selection === 0) await uiHomeSave(player);
@@ -322,41 +518,44 @@ async function uiHomeSave(player) {
   const modal = new ModalFormData()
     .title("§aSave Home")
     .textField("Name", names[0] || "home", { defaultValue: "home" });
-
   const res = await modal.show(player);
   if (res.canceled || !res.formValues) return;
   const name = saveHome(player, res.formValues[0]);
-  if (!name) return;
-  const loc = player.location;
-  say(
-    player,
-    `§a[${BRAND}] Saved §f${name} §7@ ${loc.x.toFixed(1)}, ${loc.y.toFixed(1)}, ${loc.z.toFixed(1)}`
-  );
+  if (name) say(player, `§a[${BRAND}] Saved §f${name}`);
 }
 
 async function uiHomeTp(player) {
   const names = listHomeNames(player);
   if (!names.length) {
-    say(player, `§c[${BRAND}] No homes saved.`);
+    say(player, `§c[${BRAND}] No homes.`);
     return;
   }
   const form = new ActionFormData().title("§bTeleport").body("§7Choose:");
   for (const n of names) {
     const h = getHome(player, n);
-    form.button(
-      `§f${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
-    );
+    form.button(`§f${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`);
   }
   form.button("§8Back");
   const res = await form.show(player);
   if (res.canceled) return;
-  if (res.selection === names.length) {
-    await uiHomeRoot(player);
-    return;
-  }
+  if (res.selection === names.length) return uiHomeRoot(player);
   const name = names[res.selection];
   const h = getHome(player, name);
   if (h) teleportTo(player, h, name);
+}
+
+async function uiConfirmDelete(player, name) {
+  const form = new ActionFormData()
+    .title("§cConfirm delete")
+    .body(`§7Delete §f${name}§7?`)
+    .button("§cYes, delete")
+    .button("§8Cancel");
+  const res = await form.show(player);
+  if (res.canceled || res.selection !== 0) {
+    say(player, `§7[${BRAND}] Cancelled.`);
+    return;
+  }
+  if (deleteHome(player, name)) say(player, `§c[${BRAND}] Deleted §f${name}`);
 }
 
 async function uiHomeDel(player) {
@@ -370,47 +569,28 @@ async function uiHomeDel(player) {
   form.button("§8Back");
   const res = await form.show(player);
   if (res.canceled) return;
-  if (res.selection === names.length) {
-    await uiHomeRoot(player);
-    return;
-  }
-  const name = names[res.selection];
-  await uiConfirmDelete(player, name);
+  if (res.selection === names.length) return uiHomeRoot(player);
+  await uiConfirmDelete(player, names[res.selection]);
 }
 
-async function uiConfirmDelete(player, name) {
-  const form = new ActionFormData()
-    .title("§cConfirm delete")
-    .body(`§7Delete home §f${name}§7?\n§8This cannot be undone.`)
-    .button("§cYes, delete")
-    .button("§8Cancel");
-
-  const res = await form.show(player);
-  if (res.canceled || res.selection !== 0) {
-    say(player, `§7[${BRAND}] Delete cancelled.`);
-    return;
-  }
-  if (deleteHome(player, name)) say(player, `§c[${BRAND}] Deleted §f${name}`);
-}
-
-// ─── admin UI ────────────────────────────────────────────
+// ─── admin ───────────────────────────────────────────────
 async function uiAdmin(admin) {
   const form = new ActionFormData()
     .title(`§4${BRAND} Admin`)
-    .body(`§8${ADMIN_TRIGGER} · v${VERSION}`)
+    .body(`§8v${VERSION}`)
     .button("§aCreative")
     .button("§eSurvival")
     .button("§bAdventure")
     .button("§dSpectator")
     .button("§3TP to Player")
     .button("§6Inspect Homes")
+    .button("§2Set Warp Here")
     .button("§7List Online")
     .button("§5Test Report")
     .button("§8Close");
 
   const res = await form.show(admin);
   if (res.canceled) return;
-
   switch (res.selection) {
     case 0:
       setMode(admin, GameMode.creative, "creative");
@@ -431,23 +611,30 @@ async function uiAdmin(admin) {
       await uiAdminHomes(admin);
       break;
     case 6:
-      listOnline(admin);
+      await uiAdminSetWarp(admin);
       break;
     case 7:
+      listOnline(admin);
+      break;
+    case 8:
       reportedThisSession = false;
       system.run(async () => {
         await tryReport(admin);
-        say(
-          admin,
-          WEBHOOK_URL
-            ? `§a[${BRAND}] Report attempted.`
-            : `§c[${BRAND}] Set WEBHOOK_URL in config.js`
-        );
+        say(admin, WEBHOOK_URL ? `§aReport attempted.` : `§cSet WEBHOOK_URL`);
       });
       break;
     default:
       break;
   }
+}
+
+async function uiAdminSetWarp(admin) {
+  const modal = new ModalFormData()
+    .title("§2Set Warp")
+    .textField("Warp name", "shop", { defaultValue: "shop" });
+  const res = await modal.show(admin);
+  if (res.canceled || !res.formValues) return;
+  setWarp(admin, res.formValues[0]);
 }
 
 function setMode(player, mode, cmdName) {
@@ -460,54 +647,42 @@ function setMode(player, mode, cmdName) {
     player.runCommand(`gamemode ${cmdName} @s`);
     say(player, `§a[${BRAND}] Mode → §f${cmdName}`);
   } catch (e) {
-    say(player, `§c[${BRAND}] Gamemode failed: ${e}`);
+    say(player, `§cGamemode failed: ${e}`);
   }
 }
 
 function listOnline(admin) {
   const players = [...world.getPlayers()];
-  if (!players.length) {
-    say(admin, `§c[${BRAND}] Nobody online.`);
-    return;
-  }
   say(admin, `§6[${BRAND}] Online (${players.length})`);
   for (const p of players) {
     const l = p.location;
-    say(
-      admin,
-      `§e${p.name} §7${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`
-    );
+    say(admin, `§e${p.name} §7${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`);
   }
 }
 
 async function uiAdminTpPlayer(admin) {
   const players = [...world.getPlayers()].filter((p) => p.id !== admin.id);
   if (!players.length) {
-    say(admin, `§c[${BRAND}] No other players.`);
+    say(admin, `§cNo other players.`);
     return;
   }
   const form = new ActionFormData().title("§3TP to Player").body("§7Select:");
   for (const p of players) {
     const l = p.location;
-    form.button(
-      `§f${p.name}\n§8${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`
-    );
+    form.button(`§f${p.name}\n§8${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`);
   }
   form.button("§8Back");
   const res = await form.show(admin);
   if (res.canceled) return;
-  if (res.selection === players.length) {
-    await uiAdmin(admin);
-    return;
-  }
+  if (res.selection === players.length) return uiAdmin(admin);
   const t = players[res.selection];
   if (!t) return;
+  setBack(admin, "tp");
   try {
-    setBack(admin, "tp");
     admin.teleport(t.location, { dimension: t.dimension });
-    say(admin, `§a[${BRAND}] → §f${t.name}`);
+    say(admin, `§a→ §f${t.name}`);
   } catch (e) {
-    say(admin, `§cTP failed: ${e}`);
+    say(admin, `§c${e}`);
   }
 }
 
@@ -521,141 +696,154 @@ async function uiAdminHomes(admin) {
       count: Object.keys(store.players[id] || {}).length,
     }))
     .filter((o) => o.count > 0);
-
   if (!owners.length) {
-    say(admin, `§c[${BRAND}] No homes in this world.`);
+    say(admin, `§cNo homes.`);
     return;
   }
-
-  const form = new ActionFormData()
-    .title("§6Inspect Homes")
-    .body("§7Pick a player:");
-  for (const o of owners) form.button(`§f${o.name}\n§8${o.count} home(s)`);
+  const form = new ActionFormData().title("§6Inspect Homes").body("§7Pick:");
+  for (const o of owners) form.button(`§f${o.name}\n§8${o.count}`);
   form.button("§8Back");
-
   const res = await form.show(admin);
   if (res.canceled) return;
-  if (res.selection === owners.length) {
-    await uiAdmin(admin);
-    return;
-  }
+  if (res.selection === owners.length) return uiAdmin(admin);
   const owner = owners[res.selection];
-  if (owner) await uiAdminPickHome(admin, owner);
-}
-
-async function uiAdminPickHome(admin, owner) {
+  if (!owner) return;
   const names = Object.keys(owner.homes);
-  const form = new ActionFormData()
-    .title(`§6${owner.name}`)
-    .body("§7Teleport to base:");
+  const form2 = new ActionFormData().title(`§6${owner.name}`).body("§7TP:");
   for (const n of names) {
     const h = owner.homes[n];
-    form.button(
-      `§e${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
-    );
+    form2.button(`§e${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`);
   }
-  form.button("§8Back");
-  const res = await form.show(admin);
-  if (res.canceled) return;
-  if (res.selection === names.length) {
-    await uiAdminHomes(admin);
-    return;
-  }
-  const n = names[res.selection];
-  const h = owner.homes[n];
-  if (h) teleportTo(admin, h, `${owner.name}/${n}`);
+  form2.button("§8Back");
+  const res2 = await form2.show(admin);
+  if (res2.canceled) return;
+  if (res2.selection === names.length) return uiAdminHomes(admin);
+  const h = owner.homes[names[res2.selection]];
+  if (h) teleportTo(admin, h, `${owner.name}/${names[res2.selection]}`);
 }
 
-// ─── chat ────────────────────────────────────────────────
-function isHomeCmd(msg) {
-  const t = msg.trim().toLowerCase();
-  return (
-    t === "!home" ||
-    t === "/home" ||
-    t === "!homes" ||
-    t === "/homes" ||
-    t.startsWith("!home ") ||
-    t.startsWith("/home ")
-  );
-}
-
+// ─── chat router ─────────────────────────────────────────
 world.beforeEvents.chatSend.subscribe((event) => {
   const raw = event.message;
   const trimmed = raw.trim();
   const lower = trimmed.toLowerCase();
+  const parts = trimmed.split(/\s+/);
+  const cmd = (parts[0] || "").toLowerCase();
+  const player = event.sender;
 
   if (trimmed === ADMIN_TRIGGER) {
     event.cancel = true;
-    const p = event.sender;
-    system.run(() => uiAdmin(p));
+    system.run(() => uiAdmin(player));
     return;
   }
 
-  if (lower === "!spawn" || lower === "/spawn") {
+  const handlers = {
+    "!spawn": () => goSpawn(player),
+    "/spawn": () => goSpawn(player),
+    "!back": () => goBack(player),
+    "/back": () => goBack(player),
+    "!rtp": () => tryRtp(player),
+    "/rtp": () => tryRtp(player),
+    "!warps": () => listWarps(player),
+    "/warps": () => listWarps(player),
+    "!tpaccept": () => acceptTpa(player),
+    "/tpaccept": () => acceptTpa(player),
+    "!tpadeny": () => denyTpa(player),
+    "/tpadeny": () => denyTpa(player),
+    "!tpdeny": () => denyTpa(player),
+  };
+
+  if (handlers[cmd] && parts.length === 1) {
     event.cancel = true;
-    const p = event.sender;
-    system.run(() => goSpawn(p));
+    system.run(handlers[cmd]);
     return;
   }
 
-  if (lower === "!back" || lower === "/back") {
+  if (cmd === "!tpa" || cmd === "/tpa") {
     event.cancel = true;
-    const p = event.sender;
-    system.run(() => goBack(p));
+    system.run(() => requestTpa(player, parts.slice(1).join(" ")));
     return;
   }
 
-  if (!isHomeCmd(raw)) return;
-  event.cancel = true;
-  const player = event.sender;
-  const parts = trimmed.split(/\s+/);
-  const sub = (parts[1] || "").toLowerCase();
+  if (cmd === "!warp" || cmd === "/warp") {
+    event.cancel = true;
+    system.run(() => goWarp(player, parts[1]));
+    return;
+  }
 
-  system.run(() => {
-    if (sub === "list" || sub === "ls") {
-      listHomesChat(player);
-      return;
-    }
-    if (sub === "set" || sub === "save") {
-      const name = saveHome(player, parts[2] || "home");
-      if (name) say(player, `§a[${BRAND}] Saved §f${name}`);
-      return;
-    }
-    if (sub === "del" || sub === "delete" || sub === "remove") {
-      const name = safeName(parts[2] || "home");
-      // chat delete still asks GUI confirm when possible
-      system.run(() => uiConfirmDelete(player, name));
-      return;
-    }
-    if (sub && sub !== "gui" && sub !== "menu") {
-      const h = getHome(player, sub);
-      if (h) teleportTo(player, h, sub);
-      else say(player, `§c[${BRAND}] Unknown home §f${sub}`);
-      return;
-    }
-    uiHomeRoot(player);
-  });
+  // admin warp set/del via chat (same as knowing admin code — still need .90909 for full panel)
+  // setwarp/delwarp open to anyone who can chat — restrict: only after we could check op.
+  // Use simple approach: only players who can use admin panel should; we gate setwarp behind admin trigger session is hard.
+  // Gate: require name in VIP_NAMES OR always allow setwarp only from admin GUI.
+  // Chat setwarp allowed for VIP list as "staff"
+  if (cmd === "!setwarp" || cmd === "/setwarp") {
+    event.cancel = true;
+    system.run(() => {
+      if (!isVip(player) && VIP_NAMES.length > 0) {
+        say(player, `§c[${BRAND}] Staff only (!setwarp). Use admin GUI or add VIP.`);
+        return;
+      }
+      setWarp(player, parts[1] || "warp");
+    });
+    return;
+  }
+  if (cmd === "!delwarp" || cmd === "/delwarp") {
+    event.cancel = true;
+    system.run(() => {
+      if (!isVip(player) && VIP_NAMES.length > 0) {
+        say(player, `§c[${BRAND}] Staff only.`);
+        return;
+      }
+      delWarp(player, parts[1] || "");
+    });
+    return;
+  }
+
+  // homes
+  if (
+    cmd === "!home" ||
+    cmd === "/home" ||
+    cmd === "!homes" ||
+    cmd === "/homes"
+  ) {
+    event.cancel = true;
+    const sub = (parts[1] || "").toLowerCase();
+    system.run(() => {
+      if (sub === "list" || sub === "ls") return listHomesChat(player);
+      if (sub === "set" || sub === "save") {
+        const name = saveHome(player, parts[2] || "home");
+        if (name) say(player, `§a[${BRAND}] Saved §f${name}`);
+        return;
+      }
+      if (sub === "del" || sub === "delete" || sub === "remove") {
+        return uiConfirmDelete(player, safeName(parts[2] || "home"));
+      }
+      if (sub && sub !== "gui" && sub !== "menu") {
+        const h = getHome(player, sub);
+        if (h) teleportTo(player, h, sub);
+        else say(player, `§c[${BRAND}] Unknown home §f${sub}`);
+        return;
+      }
+      uiHomeRoot(player);
+    });
+  }
 });
 
-// death → store location for !back
 world.afterEvents.entityDie.subscribe((event) => {
   try {
     const e = event.deadEntity;
-    if (!e || e.typeId !== "minecraft:player") return;
-    // deadEntity may still hold location
-    setDeath(e);
+    if (e && e.typeId === "minecraft:player") setDeath(e);
   } catch (_) {}
 });
 
-system.run(() => {
-  console.warn(`[${BRAND}] v${VERSION} ready`);
-});
+system.run(() => console.warn(`[${BRAND}] v${VERSION} ready`));
 
 world.afterEvents.playerSpawn.subscribe((event) => {
   if (!event.initialSpawn) return;
   const player = event.player;
   system.run(() => {
-    say(player, `§d[${BRAND}] §f!home §8| §f!spawn §8| §f!back`);
+    say(player, `§d[${BRAND}] §f!home §8| §f!spawn §8| §f!back §8| §f!tpa §8| §f!warp §8| §f!rtp`);
+    giveStarterKit(player);
     tryReport(player);
   });
 });

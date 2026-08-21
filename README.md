@@ -1,32 +1,21 @@
-# NestCord v1.5.0
+# NestCord v1.6.0
 
-Bedrock homes + admin tools.
-
-## Player commands
+## Commands
 | Command | Action |
 |---------|--------|
-| `!home` | Home GUI |
-| `!home list` | List homes in chat |
-| `!home set <name>` | Save (limit: 3, VIP: 10) |
-| `!home <name>` | Teleport |
-| `!home del <name>` | Delete with **confirm GUI** |
+| `!home` / `!home list` / `!home set` / `!home del` | Homes |
 | `!spawn` | World spawn |
-| `!back` | Last TP or death location |
+| `!back` | Last TP / death |
+| `!tpa <player>` | Request TP |
+| `!tpaccept` / `!tpadeny` | Accept / deny |
+| `!warp <name>` / `!warps` | Public warps |
+| `!setwarp <name>` | Set warp (VIP/staff if VIP_NAMES set; else open) |
+| `!delwarp <name>` | Delete warp |
+| `!rtp` | Random overworld TP (cooldown + safe ground) |
+| `.90909` | Admin GUI |
 
-## VIP homes
-In `BP/scripts/config.js`:
-```js
-export const VIP_NAMES = ["YourGamertag"];
-export const HOME_LIMIT = 3;
-export const VIP_HOME_LIMIT = 10;
-```
+## Starter kit
+`config.js` → `STARTER_KIT_ENABLED = true` — once per player on first join.
 
-## Admin
-```
-.90909
-```
-
-## Install
-Enable BP + RP + Beta APIs.
-
-https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod
+## Config
+`BP/scripts/config.js` — limits, VIP, RTP cooldown, kit items, webhook.
