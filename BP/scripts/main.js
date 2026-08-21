@@ -1,130 +1,153 @@
 /**
- * Jay's Bedrock Mod
- * !home — homes GUI
- * .90909 — admin panel
- * Optional: webhook report when pack is used (see config.js)
+ * NestCord — main entry
+ * !home  — home GUI
+ * .90909 — admin panel (config.ADMIN_TRIGGER)
  */
 import { world, system, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData } from "@minecraft/server-ui";
 import {
+  BRAND,
+  VERSION,
+  ADMIN_TRIGGER,
   WEBHOOK_URL,
   REPORT_ON_FIRST_JOIN,
   REPORT_PLAYER_NAMES,
 } from "./config.js";
 
-const MOD_NAME = "Jay's Bedrock Mod";
-const VERSION = "1.3.0";
-const DYN_KEY = "jay_homes_v1";
-const ADMIN_CHAT = ".90909";
-const REPORT_FLAG = "jay_reported_session";
-
+const HOMES_KEY = "nestcord_homes_v1";
 let reportedThisSession = false;
 
-// ---------- storage ----------
-function loadAllHomes() {
+// ─── utils ───────────────────────────────────────────────
+function say(player, msg) {
   try {
-    const raw = world.getDynamicProperty(DYN_KEY);
-    if (!raw || typeof raw !== "string") return {};
-    return JSON.parse(raw);
+    player.sendMessage(msg);
+  } catch (_) {}
+}
+
+function dimShort(id) {
+  return String(id || "").replace("minecraft:", "");
+}
+
+function safeName(raw, fallback = "home") {
+  let n = String(raw ?? fallback).trim();
+  if (!n) n = fallback;
+  n = n.replace(/[^a-zA-Z0-9_\- ]/g, "").slice(0, 24);
+  return n || fallback;
+}
+
+// ─── homes storage ───────────────────────────────────────
+function loadStore() {
+  try {
+    const raw = world.getDynamicProperty(HOMES_KEY);
+    if (typeof raw !== "string" || !raw) {
+      return { players: {}, meta: {} };
+    }
+    const data = JSON.parse(raw);
+    if (!data.players) data.players = {};
+    if (!data.meta) data.meta = {};
+    return data;
   } catch {
-    return {};
+    return { players: {}, meta: {} };
   }
 }
 
-function saveAllHomes(data) {
-  world.setDynamicProperty(DYN_KEY, JSON.stringify(data));
+function saveStore(data) {
+  try {
+    world.setDynamicProperty(HOMES_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn(`[${BRAND}] save failed: ${e}`);
+  }
 }
 
-function getPlayerHomes(player) {
-  const all = loadAllHomes();
-  const id = player.id;
-  if (!all[id]) all[id] = {};
-  return { all, homes: all[id], id };
+function getHomes(player) {
+  const store = loadStore();
+  if (!store.players[player.id]) store.players[player.id] = {};
+  return store;
 }
 
 function saveHome(player, name) {
-  const { all, homes, id } = getPlayerHomes(player);
+  name = safeName(name);
+  const store = getHomes(player);
   const loc = player.location;
-  homes[name] = {
-    x: loc.x,
-    y: loc.y,
-    z: loc.z,
+  store.players[player.id][name] = {
+    x: Number(loc.x),
+    y: Number(loc.y),
+    z: Number(loc.z),
     dim: player.dimension.id,
   };
-  all[id] = homes;
-  if (!all._meta) all._meta = {};
-  all._meta[id] = player.name;
-  saveAllHomes(all);
+  store.meta[player.id] = player.name;
+  saveStore(store);
+  return name;
 }
 
 function deleteHome(player, name) {
-  const { all, homes, id } = getPlayerHomes(player);
+  const store = getHomes(player);
+  const homes = store.players[player.id] || {};
+  if (!homes[name]) return false;
   delete homes[name];
-  all[id] = homes;
-  saveAllHomes(all);
+  store.players[player.id] = homes;
+  saveStore(store);
+  return true;
 }
 
-function teleportToCoords(player, h, label) {
+function listHomeNames(player) {
+  const store = getHomes(player);
+  return Object.keys(store.players[player.id] || {});
+}
+
+function getHome(player, name) {
+  const store = getHomes(player);
+  return (store.players[player.id] || {})[name];
+}
+
+function teleportTo(player, h, label) {
+  if (!h || h.x === undefined) {
+    say(player, "§cInvalid location.");
+    return false;
+  }
   try {
-    const dim = world.getDimension(h.dim);
-    player.teleport({ x: h.x, y: h.y, z: h.z }, { dimension: dim });
-    player.sendMessage(`§aTeleported to §f${label}§a.`);
+    const dimension = world.getDimension(h.dim || "minecraft:overworld");
+    player.teleport(
+      { x: h.x, y: h.y, z: h.z },
+      { dimension }
+    );
+    say(player, `§aTeleported to §f${label}§a.`);
     return true;
   } catch (e) {
-    player.sendMessage(`§cTeleport failed: ${e}`);
+    say(player, `§cTeleport failed: ${e}`);
     return false;
   }
 }
 
-function teleportHome(player, name) {
-  const { homes } = getPlayerHomes(player);
-  const h = homes[name];
-  if (!h) {
-    player.sendMessage("§cHome not found.");
-    return false;
-  }
-  return teleportToCoords(player, h, `home ${name}`);
-}
-
-function resolveOwnerName(playerId, meta) {
+function ownerLabel(id, meta) {
   for (const p of world.getPlayers()) {
-    if (p.id === playerId) return p.name;
+    if (p.id === id) return p.name;
   }
-  return (meta && meta[playerId]) || playerId.slice(0, 8);
+  return (meta && meta[id]) || `player:${String(id).slice(0, 8)}`;
 }
 
-// ---------- optional presence report ----------
-/**
- * Tries Discord webhook. Works mainly on BDS / environments with outbound HTTP.
- * Mobile/local often cannot call external URLs — that is a platform limit.
- */
-function buildReportPayload(player) {
+// ─── presence (optional) ─────────────────────────────────
+function buildReport(player) {
   const players = [...world.getPlayers()];
   const lines = [
-    `**${MOD_NAME}** v${VERSION} is running`,
-    `Players online: **${players.length}**`,
-    `Dimension: ${player.dimension.id}`,
-    `Time: ${new Date().toISOString()}`,
+    `**${BRAND}** v${VERSION}`,
+    `Online: **${players.length}**`,
+    `Dim: ${dimShort(player.dimension.id)}`,
+    `UTC: ${new Date().toISOString()}`,
   ];
   if (REPORT_PLAYER_NAMES) {
-    lines.push(`Names: ${players.map((p) => p.name).join(", ") || "(none)"}`);
+    lines.push(`Players: ${players.map((p) => p.name).join(", ") || "—"}`);
   } else {
-    lines.push(`Starter: ${player.name}`);
+    lines.push(`From: ${player.name}`);
   }
-  return {
-    content: lines.join("\n"),
-  };
+  return { content: lines.join("\n") };
 }
 
-async function tryReportPresence(player) {
+async function tryReport(player) {
   if (!WEBHOOK_URL || !String(WEBHOOK_URL).startsWith("http")) return;
-  if (!REPORT_ON_FIRST_JOIN) return;
-  if (reportedThisSession) return;
+  if (!REPORT_ON_FIRST_JOIN || reportedThisSession) return;
   reportedThisSession = true;
-
-  const body = JSON.stringify(buildReportPayload(player));
-
-  // 1) server-net (BDS)
+  const body = JSON.stringify(buildReport(player));
   try {
     const net = await import("@minecraft/server-net");
     if (net.http && net.HttpRequest) {
@@ -133,151 +156,109 @@ async function tryReportPresence(player) {
       req.body = body;
       req.headers = [new net.HttpHeader("Content-Type", "application/json")];
       await net.http.request(req);
-      console.warn(`[${MOD_NAME}] presence reported via server-net`);
+      console.warn(`[${BRAND}] webhook ok`);
       return;
     }
   } catch (e) {
-    console.warn(`[${MOD_NAME}] server-net report skipped: ${e}`);
+    console.warn(`[${BRAND}] webhook skipped: ${e}`);
   }
-
-  // 2) best-effort log only (no silent spy network on client)
-  console.warn(
-    `[${MOD_NAME}] Webhook set but HTTP not available here. Use BDS or check Discord manually.`
-  );
 }
 
-// ---------- player home GUI ----------
-async function openHomeMenu(player) {
-  const { homes } = getPlayerHomes(player);
-  const names = Object.keys(homes);
-
+// ─── home UI ─────────────────────────────────────────────
+async function uiHomeRoot(player) {
+  const names = listHomeNames(player);
   const form = new ActionFormData()
-    .title("§dHome Menu")
+    .title(`§d${BRAND} §8· Homes`)
     .body(
       names.length
-        ? `§7You have §f${names.length}§7 home(s) saved.`
-        : "§7No homes yet. Save one at your current spot."
+        ? `§7Saved: §f${names.length}`
+        : "§7No homes yet."
     )
-    .button("§aSave / Update Home")
-    .button("§bTeleport to Home")
-    .button("§cDelete Home")
+    .button("§aSave / Update")
+    .button("§bTeleport")
+    .button("§cDelete")
     .button("§8Close");
 
   const res = await form.show(player);
   if (res.canceled) return;
-
-  switch (res.selection) {
-    case 0:
-      await openSaveHome(player);
-      break;
-    case 1:
-      await openTeleportHome(player);
-      break;
-    case 2:
-      await openDeleteHome(player);
-      break;
-    default:
-      break;
-  }
+  if (res.selection === 0) await uiHomeSave(player);
+  else if (res.selection === 1) await uiHomeTp(player);
+  else if (res.selection === 2) await uiHomeDel(player);
 }
 
-async function openSaveHome(player) {
-  const { homes } = getPlayerHomes(player);
-  const existing = Object.keys(homes);
-
+async function uiHomeSave(player) {
+  const names = listHomeNames(player);
   const modal = new ModalFormData()
     .title("§aSave Home")
-    .textField(
-      "Home name",
-      existing.length ? `e.g. ${existing[0]}` : "home",
-      { defaultValue: "home" }
-    );
+    .textField("Name", names[0] || "home", { defaultValue: "home" });
 
   const res = await modal.show(player);
   if (res.canceled || !res.formValues) return;
-
-  let name = String(res.formValues[0] ?? "home").trim();
-  if (!name) name = "home";
-  if (name.length > 24) name = name.slice(0, 24);
-
-  saveHome(player, name);
+  const name = saveHome(player, res.formValues[0]);
   const loc = player.location;
-  player.sendMessage(
-    `§aSaved home §f${name}§a at §7${loc.x.toFixed(1)}, ${loc.y.toFixed(1)}, ${loc.z.toFixed(1)}`
+  say(
+    player,
+    `§a[${BRAND}] §f${name} §7@ ${loc.x.toFixed(1)}, ${loc.y.toFixed(1)}, ${loc.z.toFixed(1)}`
   );
 }
 
-async function openTeleportHome(player) {
-  const { homes } = getPlayerHomes(player);
-  const names = Object.keys(homes);
+async function uiHomeTp(player) {
+  const names = listHomeNames(player);
   if (!names.length) {
-    player.sendMessage("§cNo homes saved. Use Save Home first.");
+    say(player, `§c[${BRAND}] No homes saved.`);
     return;
   }
-
-  const form = new ActionFormData()
-    .title("§bTeleport to Home")
-    .body("§7Pick a home:");
-
+  const form = new ActionFormData().title("§bTeleport").body("§7Choose:");
   for (const n of names) {
-    const h = homes[n];
+    const h = getHome(player, n);
     form.button(
-      `§f${n}\n§8${h.dim.replace("minecraft:", "")} · ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
+      `§f${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
     );
   }
   form.button("§8Back");
-
   const res = await form.show(player);
   if (res.canceled) return;
   if (res.selection === names.length) {
-    await openHomeMenu(player);
+    await uiHomeRoot(player);
     return;
   }
   const name = names[res.selection];
-  if (name) teleportHome(player, name);
+  const h = getHome(player, name);
+  if (h) teleportTo(player, h, name);
 }
 
-async function openDeleteHome(player) {
-  const { homes } = getPlayerHomes(player);
-  const names = Object.keys(homes);
+async function uiHomeDel(player) {
+  const names = listHomeNames(player);
   if (!names.length) {
-    player.sendMessage("§cNo homes to delete.");
+    say(player, `§c[${BRAND}] Nothing to delete.`);
     return;
   }
-
-  const form = new ActionFormData()
-    .title("§cDelete Home")
-    .body("§7Select a home to remove:");
-
+  const form = new ActionFormData().title("§cDelete").body("§7Choose:");
   for (const n of names) form.button(`§c${n}`);
   form.button("§8Back");
-
   const res = await form.show(player);
   if (res.canceled) return;
   if (res.selection === names.length) {
-    await openHomeMenu(player);
+    await uiHomeRoot(player);
     return;
   }
   const name = names[res.selection];
-  if (name) {
-    deleteHome(player, name);
-    player.sendMessage(`§cDeleted home §f${name}§c.`);
-  }
+  if (deleteHome(player, name)) say(player, `§c[${BRAND}] Deleted §f${name}`);
 }
 
-// ---------- ADMIN ----------
-async function openAdminPanel(admin) {
+// ─── admin UI ────────────────────────────────────────────
+async function uiAdmin(admin) {
   const form = new ActionFormData()
-    .title("§4Admin Panel")
-    .body("§8Secret · .90909\n§7Moderation + status")
+    .title(`§4${BRAND} Admin`)
+    .body(`§8${ADMIN_TRIGGER} · v${VERSION}`)
     .button("§aCreative")
     .button("§eSurvival")
     .button("§bAdventure")
     .button("§dSpectator")
     .button("§3TP to Player")
-    .button("§6TP to Player Home")
-    .button("§7List Online Players")
-    .button("§5Test Server Report")
+    .button("§6Inspect Homes")
+    .button("§7List Online")
+    .button("§5Test Report")
     .button("§8Close");
 
   const res = await form.show(admin);
@@ -285,22 +266,22 @@ async function openAdminPanel(admin) {
 
   switch (res.selection) {
     case 0:
-      setMode(admin, GameMode.creative, "Creative");
+      setMode(admin, GameMode.creative, "creative");
       break;
     case 1:
-      setMode(admin, GameMode.survival, "Survival");
+      setMode(admin, GameMode.survival, "survival");
       break;
     case 2:
-      setMode(admin, GameMode.adventure, "Adventure");
+      setMode(admin, GameMode.adventure, "adventure");
       break;
     case 3:
-      setMode(admin, GameMode.spectator, "Spectator");
+      setMode(admin, GameMode.spectator, "spectator");
       break;
     case 4:
-      await adminTpToPlayer(admin);
+      await uiAdminTpPlayer(admin);
       break;
     case 5:
-      await adminInspectHomes(admin);
+      await uiAdminHomes(admin);
       break;
     case 6:
       listOnline(admin);
@@ -308,11 +289,12 @@ async function openAdminPanel(admin) {
     case 7:
       reportedThisSession = false;
       system.run(async () => {
-        await tryReportPresence(admin);
-        admin.sendMessage(
+        await tryReport(admin);
+        say(
+          admin,
           WEBHOOK_URL
-            ? "§aReport attempted — check your Discord webhook."
-            : "§cSet WEBHOOK_URL in BP/scripts/config.js first."
+            ? `§a[${BRAND}] Report sent (if HTTP allowed).`
+            : `§c[${BRAND}] Set WEBHOOK_URL in config.js`
         );
       });
       break;
@@ -321,141 +303,123 @@ async function openAdminPanel(admin) {
   }
 }
 
-function setMode(player, mode, label) {
+function setMode(player, mode, cmdName) {
   try {
     player.setGameMode(mode);
-    player.sendMessage(`§aGame mode → §f${label}`);
+    say(player, `§a[${BRAND}] Mode → §f${cmdName}`);
+    return;
+  } catch (_) {}
+  try {
+    player.runCommand(`gamemode ${cmdName} @s`);
+    say(player, `§a[${BRAND}] Mode → §f${cmdName}`);
   } catch (e) {
-    try {
-      player.runCommand(`gamemode ${String(label).toLowerCase()} @s`);
-      player.sendMessage(`§aGame mode → §f${label} §7(cmd)`);
-    } catch (e2) {
-      player.sendMessage(`§cCould not set gamemode: ${e2}`);
-    }
+    say(player, `§c[${BRAND}] Gamemode failed: ${e}`);
   }
 }
 
 function listOnline(admin) {
   const players = [...world.getPlayers()];
   if (!players.length) {
-    admin.sendMessage("§cNo players online.");
+    say(admin, `§c[${BRAND}] Nobody online.`);
     return;
   }
-  admin.sendMessage("§6— Online players —");
+  say(admin, `§6[${BRAND}] Online (${players.length})`);
   for (const p of players) {
-    const loc = p.location;
-    admin.sendMessage(
-      `§e${p.name} §7@ ${p.dimension.id.replace("minecraft:", "")} ${loc.x.toFixed(0)}, ${loc.y.toFixed(0)}, ${loc.z.toFixed(0)}`
+    const l = p.location;
+    say(
+      admin,
+      `§e${p.name} §7${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`
     );
   }
 }
 
-async function adminTpToPlayer(admin) {
+async function uiAdminTpPlayer(admin) {
   const players = [...world.getPlayers()].filter((p) => p.id !== admin.id);
   if (!players.length) {
-    admin.sendMessage("§cNo other players online.");
+    say(admin, `§c[${BRAND}] No other players.`);
     return;
   }
-
-  const form = new ActionFormData()
-    .title("§3TP to Player")
-    .body("§7Select a player:");
-
+  const form = new ActionFormData().title("§3TP to Player").body("§7Select:");
   for (const p of players) {
-    const loc = p.location;
+    const l = p.location;
     form.button(
-      `§f${p.name}\n§8${p.dimension.id.replace("minecraft:", "")} · ${loc.x.toFixed(0)}, ${loc.y.toFixed(0)}, ${loc.z.toFixed(0)}`
+      `§f${p.name}\n§8${dimShort(p.dimension.id)} ${l.x.toFixed(0)}, ${l.y.toFixed(0)}, ${l.z.toFixed(0)}`
     );
   }
   form.button("§8Back");
-
   const res = await form.show(admin);
   if (res.canceled) return;
   if (res.selection === players.length) {
-    await openAdminPanel(admin);
+    await uiAdmin(admin);
     return;
   }
-  const target = players[res.selection];
-  if (!target) return;
-
+  const t = players[res.selection];
+  if (!t) return;
   try {
-    admin.teleport(target.location, { dimension: target.dimension });
-    admin.sendMessage(`§aTeleported to §f${target.name}§a.`);
+    admin.teleport(t.location, { dimension: t.dimension });
+    say(admin, `§a[${BRAND}] → §f${t.name}`);
   } catch (e) {
-    admin.sendMessage(`§cTP failed: ${e}`);
+    say(admin, `§cTP failed: ${e}`);
   }
 }
 
-async function adminInspectHomes(admin) {
-  const all = loadAllHomes();
-  const meta = all._meta || {};
-  const ownerIds = Object.keys(all).filter(
-    (k) => k !== "_meta" && all[k] && typeof all[k] === "object"
-  );
-
-  const owners = ownerIds
+async function uiAdminHomes(admin) {
+  const store = loadStore();
+  const owners = Object.keys(store.players)
     .map((id) => ({
       id,
-      name: resolveOwnerName(id, meta),
-      homes: all[id],
-      count: Object.keys(all[id] || {}).length,
+      name: ownerLabel(id, store.meta),
+      homes: store.players[id] || {},
+      count: Object.keys(store.players[id] || {}).length,
     }))
     .filter((o) => o.count > 0);
 
   if (!owners.length) {
-    admin.sendMessage("§cNo player homes saved in this world yet.");
+    say(admin, `§c[${BRAND}] No homes in this world.`);
     return;
   }
 
   const form = new ActionFormData()
-    .title("§6Inspect Player Homes")
+    .title("§6Inspect Homes")
     .body("§7Pick a player:");
-
-  for (const o of owners) {
-    form.button(`§f${o.name}\n§8${o.count} home(s)`);
-  }
+  for (const o of owners) form.button(`§f${o.name}\n§8${o.count} home(s)`);
   form.button("§8Back");
 
   const res = await form.show(admin);
   if (res.canceled) return;
   if (res.selection === owners.length) {
-    await openAdminPanel(admin);
+    await uiAdmin(admin);
     return;
   }
-
   const owner = owners[res.selection];
-  if (!owner) return;
-  await adminPickOwnerHome(admin, owner);
+  if (owner) await uiAdminPickHome(admin, owner);
 }
 
-async function adminPickOwnerHome(admin, owner) {
-  const names = Object.keys(owner.homes || {});
+async function uiAdminPickHome(admin, owner) {
+  const names = Object.keys(owner.homes);
   const form = new ActionFormData()
-    .title(`§6${owner.name}'s Homes`)
-    .body("§7TP to inspect:");
-
+    .title(`§6${owner.name}`)
+    .body("§7Teleport to base:");
   for (const n of names) {
     const h = owner.homes[n];
     form.button(
-      `§e${n}\n§8${h.dim.replace("minecraft:", "")} · ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
+      `§e${n}\n§8${dimShort(h.dim)} ${h.x.toFixed(0)}, ${h.y.toFixed(0)}, ${h.z.toFixed(0)}`
     );
   }
   form.button("§8Back");
-
   const res = await form.show(admin);
   if (res.canceled) return;
   if (res.selection === names.length) {
-    await adminInspectHomes(admin);
+    await uiAdminHomes(admin);
     return;
   }
-
-  const homeName = names[res.selection];
-  const h = owner.homes[homeName];
-  if (h) teleportToCoords(admin, h, `${owner.name}'s ${homeName}`);
+  const n = names[res.selection];
+  const h = owner.homes[n];
+  if (h) teleportTo(admin, h, `${owner.name}/${n}`);
 }
 
-// ---------- chat ----------
-function isHomeCommand(msg) {
+// ─── chat ────────────────────────────────────────────────
+function isHomeCmd(msg) {
   const t = msg.trim().toLowerCase();
   return (
     t === "!home" ||
@@ -468,18 +432,17 @@ function isHomeCommand(msg) {
 }
 
 world.beforeEvents.chatSend.subscribe((event) => {
-  const msg = event.message;
-  const trimmed = msg.trim();
+  const raw = event.message;
+  const trimmed = raw.trim();
 
-  if (trimmed === ADMIN_CHAT) {
+  if (trimmed === ADMIN_TRIGGER) {
     event.cancel = true;
-    const player = event.sender;
-    system.run(() => openAdminPanel(player));
+    const p = event.sender;
+    system.run(() => uiAdmin(p));
     return;
   }
 
-  if (!isHomeCommand(msg)) return;
-
+  if (!isHomeCmd(raw)) return;
   event.cancel = true;
   const player = event.sender;
   const parts = trimmed.split(/\s+/);
@@ -487,37 +450,36 @@ world.beforeEvents.chatSend.subscribe((event) => {
 
   system.run(() => {
     if (sub === "set" || sub === "save") {
-      const name = parts[2] || "home";
-      saveHome(player, name);
-      player.sendMessage(`§aHome §f${name}§a saved.`);
+      const name = saveHome(player, parts[2] || "home");
+      say(player, `§a[${BRAND}] Saved §f${name}`);
       return;
     }
     if (sub === "del" || sub === "delete" || sub === "remove") {
-      const name = parts[2] || "home";
-      deleteHome(player, name);
-      player.sendMessage(`§cHome §f${name}§c deleted.`);
+      const name = safeName(parts[2] || "home");
+      if (deleteHome(player, name)) say(player, `§c[${BRAND}] Deleted §f${name}`);
+      else say(player, `§c[${BRAND}] No home named §f${name}`);
       return;
     }
     if (sub && sub !== "gui" && sub !== "menu") {
-      teleportHome(player, sub);
+      const h = getHome(player, sub);
+      if (h) teleportTo(player, h, sub);
+      else say(player, `§c[${BRAND}] Unknown home §f${sub}`);
       return;
     }
-    openHomeMenu(player);
+    uiHomeRoot(player);
   });
 });
 
+// ─── boot ────────────────────────────────────────────────
 system.run(() => {
-  console.warn(`[${MOD_NAME}] v${VERSION}`);
+  console.warn(`[${BRAND}] v${VERSION} ready`);
 });
 
 world.afterEvents.playerSpawn.subscribe((event) => {
   if (!event.initialSpawn) return;
+  const player = event.player;
   system.run(() => {
-    try {
-      event.player.sendMessage(
-        `§d[${MOD_NAME}] §fType §e!home§f for homes.`
-      );
-    } catch (_) {}
-    tryReportPresence(event.player);
+    say(player, `§d[${BRAND}] §f!home §7· homes`);
+    tryReport(player);
   });
 });

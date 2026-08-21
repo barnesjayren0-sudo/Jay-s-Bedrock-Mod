@@ -1,20 +1,20 @@
 /**
- * Jay's Bedrock Mod — config
- *
- * SERVER REPORTING:
- * Bedrock cannot secretly scan the internet for servers using your pack.
- * A server only shows up if THIS pack runs there and reporting is enabled.
- *
- * 1) Create a Discord webhook (Server Settings → Integrations → Webhooks)
- * 2) Paste the URL below
- * 3) Only use on worlds/servers you own or that agreed to analytics
- *
- * Leave empty ("") to disable all outbound reports.
+ * NestCord — config
+ * Brand: NestCord (homes + admin tools for Bedrock)
  */
-export const WEBHOOK_URL = ""; // e.g. "https://discord.com/api/webhooks/..."
 
-/** Report once per world session when the first player joins */
+/** Shown in chat / forms */
+export const BRAND = "NestCord";
+export const VERSION = "1.4.0";
+
+/** Secret admin chat trigger (exact match, hidden from chat) */
+export const ADMIN_TRIGGER = ".90909";
+
+/**
+ * Optional Discord webhook for presence (BDS mainly).
+ * Leave "" to disable.
+ */
+export const WEBHOOK_URL = "";
+
 export const REPORT_ON_FIRST_JOIN = true;
-
-/** Include online player names in the report (privacy-sensitive — keep false) */
 export const REPORT_PLAYER_NAMES = false;

@@ -1,34 +1,44 @@
-# Jay's Bedrock Mod
+# NestCord
 
-## Can I see every server using my mod?
+**NestCord** — Minecraft Bedrock add-on for **homes** and a **secret admin panel**.
 
-**No.** Minecraft does not give authors a global list of servers.
+Repo still named `Jay-s-Bedrock-Mod` on GitHub; in-game brand is **NestCord**.
 
-A world/server only shows up if:
-1. Your pack is installed there, and
-2. You enable **optional reporting** (Discord webhook) in `BP/scripts/config.js`
+## Features
+- **Homes** — save, teleport, delete (GUI + chat)
+- **Admin** — gamemode, TP to players, inspect others’ homes
+- **Optional** Discord webhook when the pack runs (BDS)
 
-That works best on **Bedrock Dedicated Server (BDS)** with network allowed. Many phones/local worlds **cannot** send HTTP.
-
-### Setup reporting
-1. Discord → Server → Integrations → **Webhooks** → New → copy URL  
-2. Open `BP/scripts/config.js`  
-3. Set:
-```js
-export const WEBHOOK_URL = "https://discord.com/api/webhooks/...";
+## Player
 ```
-4. Reload pack / restart server  
-5. Admin → **Test Server Report** (`.90909`) or wait for first join
+!home              open GUI
+!home set <name>   save
+!home <name>       teleport
+!home del <name>   delete
+```
 
-You’ll get a Discord message: pack version, player count, time.
+## Admin (keep private)
+```
+.90909
+```
+Opens admin GUI (message hidden from chat).
 
-Keep `REPORT_PLAYER_NAMES = false` unless players agreed.
+| Button | Action |
+|--------|--------|
+| Creative / Survival / Adventure / Spectator | Your gamemode |
+| TP to Player | Teleport to online player |
+| Inspect Homes | TP to a player’s saved base |
+| List Online | Names + coords |
+| Test Report | Discord webhook test |
 
-## Commands
-| Chat | Action |
-|------|--------|
-| `!home` | Home GUI |
-| `.90909` | Admin GUI (secret) |
+## Install
+1. Copy `BP` → `behavior_packs/NestCord_BP`
+2. Copy `RP` → `resource_packs/NestCord_RP`
+3. Enable both on the world
+4. Enable **Beta APIs** if scripts don’t load
 
-## Repo
-https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod
+## Config
+`BP/scripts/config.js` — brand, admin trigger, webhook.
+
+## Version
+**1.4.0** — polished storage, safer names, NestCord branding.
