@@ -1,21 +1,21 @@
-# NestCord v1.6.0
+# NestCord v1.7.0
 
-## Commands
-| Command | Action |
-|---------|--------|
-| `!home` / `!home list` / `!home set` / `!home del` | Homes |
-| `!spawn` | World spawn |
-| `!back` | Last TP / death |
-| `!tpa <player>` | Request TP |
-| `!tpaccept` / `!tpadeny` | Accept / deny |
-| `!warp <name>` / `!warps` | Public warps |
-| `!setwarp <name>` | Set warp (VIP/staff if VIP_NAMES set; else open) |
-| `!delwarp <name>` | Delete warp |
-| `!rtp` | Random overworld TP (cooldown + safe ground) |
-| `.90909` | Admin GUI |
+## Admin (`.90909` or your `ADMIN_TRIGGER`)
 
-## Starter kit
-`config.js` → `STARTER_KIT_ENABLED = true` — once per player on first join.
+| Tool | Action |
+|------|--------|
+| Freeze / Unfreeze | Lock player in place until unfreeze |
+| Invsee | Item counts in chat |
+| Warn | Clear warning message to player |
+| Kick | Kick if API/command allows; else freeze fallback |
+| Spectate Player | Spectator + TP to them |
+| TP / Inspect homes | As before |
 
-## Config
-`BP/scripts/config.js` — limits, VIP, RTP cooldown, kit items, webhook.
+### config.js
+```js
+export const ADMIN_TRIGGER = ".90909";
+export const ADMIN_NAMES = ["YourGamertag"]; // empty = anyone with code
+export const ADMIN_LOG_WEBHOOK = "https://discord.com/api/webhooks/...";
+```
+
+Admin actions log to `ADMIN_LOG_WEBHOOK` (or `WEBHOOK_URL`).
