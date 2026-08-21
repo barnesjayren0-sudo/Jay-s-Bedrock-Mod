@@ -2,16 +2,12 @@
   "format_version": 2,
   "header": {
     "name": "NestCord RP",
-    "description": "NestCord v1.8.0 — add pack_icon.png (128x128) here",
+    "description": "NestCord v1.9.0 — add pack_icon.png 128x128",
     "uuid": "d4e5f6a7-b8c9-0123-def0-234567890123",
-    "version": [1, 8, 0],
+    "version": [1, 9, 0],
     "min_engine_version": [1, 21, 0]
   },
   "modules": [
-    {
-      "type": "resources",
-      "uuid": "e5f6a7b8-c9d0-1234-ef01-345678901234",
-      "version": [1, 8, 0]
-    }
+    { "type": "resources", "uuid": "e5f6a7b8-c9d0-1234-ef01-345678901234", "version": [1, 9, 0] }
   ]
 }

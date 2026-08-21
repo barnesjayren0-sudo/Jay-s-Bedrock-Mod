@@ -1,24 +1,26 @@
-# NestCord v1.8.0
+# NestCord v1.9.0
 
-## Safety
-- **TP cooldown** 10s (`TP_COOLDOWN_SEC`)
-- **Combat tag** blocks TP 10s after damage
-- **No home set in Nether** (`HOME_SET_BLACKLIST`)
-- **Safe landing** vertical search on TP
+Polished Bedrock utility pack: homes, TPA, warps, RTP, economy, jobs, claims, admin.
 
-## Polish
-- Sounds on save / TP
-- Action bar feedback
-- `es_ES` lang stubs
-- See `tools/make_mcaddon.md` for pack icon + `.mcaddon`
+## New in 1.9
+- **Jobs board** — `!jobs` / `!work`
+- **Claim protection** — break/place denied for non-owners
+- **Home compass** — recovery compass on first join; **use item** opens home GUI
 
-## New commands
-| Cmd | Action |
-|-----|--------|
-| `!bal` / `$bal` | Balance |
-| `!pay <player> <amount>` | Pay |
-| `!daily` | Daily money |
-| `!claim` / `!unclaim` | Simple radius claim |
+## Commands
+| Command | |
+|---------|--|
+| `!home` | Homes GUI |
+| `!spawn` `!back` `!rtp` | Travel |
+| `!tpa` `!tpaccept` | TPA |
+| `!warp` `!warps` | Warps |
+| `!bal` `!pay` `!daily` | Economy |
+| `!jobs` `!work` | Jobs |
+| `!claim` `!unclaim` | Land |
+| `.90909` | Admin |
 
 ## Config
 `BP/scripts/config.js`
+
+## Install
+Enable BP + RP + Beta APIs. Optional: `pack_icon.png` 128×128 in BP/RP.
