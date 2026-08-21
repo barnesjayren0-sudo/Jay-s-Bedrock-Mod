@@ -1,44 +1,32 @@
-# NestCord
+# NestCord v1.5.0
 
-**NestCord** — Minecraft Bedrock add-on for **homes** and a **secret admin panel**.
+Bedrock homes + admin tools.
 
-Repo still named `Jay-s-Bedrock-Mod` on GitHub; in-game brand is **NestCord**.
+## Player commands
+| Command | Action |
+|---------|--------|
+| `!home` | Home GUI |
+| `!home list` | List homes in chat |
+| `!home set <name>` | Save (limit: 3, VIP: 10) |
+| `!home <name>` | Teleport |
+| `!home del <name>` | Delete with **confirm GUI** |
+| `!spawn` | World spawn |
+| `!back` | Last TP or death location |
 
-## Features
-- **Homes** — save, teleport, delete (GUI + chat)
-- **Admin** — gamemode, TP to players, inspect others’ homes
-- **Optional** Discord webhook when the pack runs (BDS)
-
-## Player
+## VIP homes
+In `BP/scripts/config.js`:
+```js
+export const VIP_NAMES = ["YourGamertag"];
+export const HOME_LIMIT = 3;
+export const VIP_HOME_LIMIT = 10;
 ```
-!home              open GUI
-!home set <name>   save
-!home <name>       teleport
-!home del <name>   delete
-```
 
-## Admin (keep private)
+## Admin
 ```
 .90909
 ```
-Opens admin GUI (message hidden from chat).
-
-| Button | Action |
-|--------|--------|
-| Creative / Survival / Adventure / Spectator | Your gamemode |
-| TP to Player | Teleport to online player |
-| Inspect Homes | TP to a player’s saved base |
-| List Online | Names + coords |
-| Test Report | Discord webhook test |
 
 ## Install
-1. Copy `BP` → `behavior_packs/NestCord_BP`
-2. Copy `RP` → `resource_packs/NestCord_RP`
-3. Enable both on the world
-4. Enable **Beta APIs** if scripts don’t load
+Enable BP + RP + Beta APIs.
 
-## Config
-`BP/scripts/config.js` — brand, admin trigger, webhook.
-
-## Version
-**1.4.0** — polished storage, safer names, NestCord branding.
+https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod
