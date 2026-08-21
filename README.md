@@ -1,39 +1,38 @@
 # Jay's Bedrock Mod
 
-Minecraft **Bedrock** add-on: Behavior Pack + Resource Pack + Script API.
+Behavior Pack + Resource Pack + Script API for Minecraft Bedrock.
 
-## /home GUI (v1.1)
-
-Open the menu by chatting:
-
+## Player: homes
+Chat:
 ```
 !home
 ```
+GUI: save / teleport / delete homes.
 
-(Also accepts `/home` in chat — the message is canceled so it won’t show to others.)
-
-### GUI buttons
-| Button | Action |
-|--------|--------|
-| **Save / Update Home** | Name your home (default `home`) at current position |
-| **Teleport to Home** | Pick a saved home and TP |
-| **Delete Home** | Remove a saved home |
-
-### Quick chat (no GUI)
+Quick:
 ```
-!home set <name>     save
-!home <name>         teleport
-!home del <name>     delete
-!home                open GUI
+!home set <name>
+!home <name>
+!home del <name>
 ```
 
-Homes are stored in **world dynamic properties** (per player id).
+## Admin (secret)
+Type **exactly** in chat (message is hidden):
+```
+.90909
+```
+
+### Admin GUI
+| Button | What it does |
+|--------|----------------|
+| Creative / Survival / Adventure / Spectator | Change **your** game mode |
+| TP to Player | Teleport to an online player |
+| TP to Player Home (inspect) | List saved homes → TP to their base |
+| List Online Players | Chat coords of everyone online |
+
+Anyone who knows `.90909` can open this on a world with this pack. Keep the code private.
 
 ## Install
-1. Copy `BP` → `behavior_packs/JayBedrock_BP/`
-2. Copy `RP` → `resource_packs/JayBedrock_RP/`
-3. Enable both packs on the world
-4. Turn on **Beta APIs** if Script API asks for it
+Copy `BP` and `RP` into the world's behavior/resource packs and enable **Beta APIs** if needed.
 
-## Repo
-https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod
+Repo: https://github.com/barnesjayren0-sudo/Jay-s-Bedrock-Mod
