@@ -1,21 +1,24 @@
-# NestCord v1.7.0
+# NestCord v1.8.0
 
-## Admin (`.90909` or your `ADMIN_TRIGGER`)
+## Safety
+- **TP cooldown** 10s (`TP_COOLDOWN_SEC`)
+- **Combat tag** blocks TP 10s after damage
+- **No home set in Nether** (`HOME_SET_BLACKLIST`)
+- **Safe landing** vertical search on TP
 
-| Tool | Action |
-|------|--------|
-| Freeze / Unfreeze | Lock player in place until unfreeze |
-| Invsee | Item counts in chat |
-| Warn | Clear warning message to player |
-| Kick | Kick if API/command allows; else freeze fallback |
-| Spectate Player | Spectator + TP to them |
-| TP / Inspect homes | As before |
+## Polish
+- Sounds on save / TP
+- Action bar feedback
+- `es_ES` lang stubs
+- See `tools/make_mcaddon.md` for pack icon + `.mcaddon`
 
-### config.js
-```js
-export const ADMIN_TRIGGER = ".90909";
-export const ADMIN_NAMES = ["YourGamertag"]; // empty = anyone with code
-export const ADMIN_LOG_WEBHOOK = "https://discord.com/api/webhooks/...";
-```
+## New commands
+| Cmd | Action |
+|-----|--------|
+| `!bal` / `$bal` | Balance |
+| `!pay <player> <amount>` | Pay |
+| `!daily` | Daily money |
+| `!claim` / `!unclaim` | Simple radius claim |
 
-Admin actions log to `ADMIN_LOG_WEBHOOK` (or `WEBHOOK_URL`).
+## Config
+`BP/scripts/config.js`
